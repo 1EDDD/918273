@@ -48,8 +48,8 @@ jobs:
           mkdir -p build/ipa/Payload
           ditto "$APP_PATH" build/ipa/Payload/TendiesStudio.app
           (cd build/ipa && /usr/bin/zip -qry "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa" Payload)
-          test -s TendiesStudio-unsigned.ipa
-          /usr/bin/unzip -l TendiesStudio-unsigned.ipa | head -40
+          test -s "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa"
+          /usr/bin/unzip -l "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa" | head -40
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
