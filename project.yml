@@ -1,0 +1,28 @@
+name: TendiesStudio
+options:
+  deploymentTarget:
+    iOS: "16.0"
+  bundleIdPrefix: com.oneeddd
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.19
+targets:
+  TendiesStudio:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: ZIPFoundation
+        product: ZIPFoundation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.oneeddd.tendiesstudio
+        PRODUCT_NAME: TendiesStudio
+        INFOPLIST_KEY_CFBundleDisplayName: Tendies Studio
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        CODE_SIGN_STYLE: Automatic
