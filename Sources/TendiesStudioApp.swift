@@ -82,7 +82,6 @@ struct ContentView: View {
                           allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie]) { result in
                 do {
                     let picked = try result.get()
-                    guard let picked else { return }
                     let access = picked.startAccessingSecurityScopedResource()
                     defer { if access { picked.stopAccessingSecurityScopedResource() } }
                     let local = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "-" + picked.lastPathComponent)
