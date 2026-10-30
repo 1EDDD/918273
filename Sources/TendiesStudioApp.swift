@@ -81,7 +81,7 @@ struct ContentView: View {
             .fileImporter(isPresented: $importing,
                           allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie]) { result in
                 do {
-                    let picked = try result.get().first
+                    let picked = try result.get()
                     guard let picked else { return }
                     let access = picked.startAccessingSecurityScopedResource()
                     defer { if access { picked.stopAccessingSecurityScopedResource() } }
