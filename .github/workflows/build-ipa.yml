@@ -27,7 +27,8 @@ jobs:
           from zipfile import ZipFile
 
           source = Path("source")
-          files = [source / "part01.b64", source / "part02.b64"]
+          files = [source / "part01.b64"]
+          files += sorted(source.glob("part02-*.b64"))
           files += sorted(source.glob("part03-*.b64"))
           encoded = "".join(path.read_text().strip() for path in files)
           archive = Path("tendies-source.zip")
