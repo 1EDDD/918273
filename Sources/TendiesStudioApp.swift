@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var height = 2796
     @State private var scale = 3
     @State private var identifier = 9136
+    @State private var reverseOnLoop = false
     @State private var importing = false
     @State private var converting = false
     @State private var status = "Choose a MOV or MP4 video"
@@ -55,6 +56,9 @@ struct ContentView: View {
                     Stepper("Frame rate: \(Int(fps)) FPS", value: $fps, in: 1...60, step: 1)
                     Stepper("Scale: @\(scale)x", value: $scale, in: 1...3)
                     Stepper("Identifier: \(identifier)", value: $identifier, in: 1...99999)
+                    Toggle("Reverse video on loop", isOn: $reverseOnLoop)
+                    Text("Videos are limited to 300 frames at the selected frame rate.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Export") {
                     if converting { ProgressView(value: progress) }
@@ -113,11 +117,11 @@ struct ContentView: View {
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(name + ".tendies")
         do {
             try? FileManager.default.removeItem(at: destination)
-            let w = width, h = height, s = scale, f = fps, id = identifier
+            let w = width, h = height, s = scale, f = fps, id = identifier, reverse = reverseOnLoop
             try await Task.detached(priority: .userInitiated) {
                 try TendiesExporter.export(videoURL: videoURL, outputURL: destination,
                                            wallpaperName: name, width: w, height: h,
-                                           scale: s, fps: f, identifier: id)
+                                           scale: s, fps: f, identifier: id, reverseOnLoop: reverse)
             }.value
             outputURL = destination
             status = "Created \(destination.lastPathComponent)"
@@ -142,7 +146,8 @@ struct ShareSheet: UIViewControllerRepresentable {
 
 enum TendiesExporter {
     static func export(videoURL: URL, outputURL: URL, wallpaperName: String,
-                       width: Int, height: Int, scale: Int, fps: Double, identifier: Int) throws {
+                       width: Int, height: Int, scale: Int, fps: Double, identifier: Int,
+                       reverseOnLoop: Bool) throws {
         let fm = FileManager.default
         let temp = fm.temporaryDirectory.appendingPathComponent("tendies-" + UUID().uuidString, isDirectory: true)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true)
@@ -173,6 +178,7 @@ enum TendiesExporter {
 
         let step = 1.0 / max(1.0, fps)
         let count = max(1, Int(ceil(duration * fps)))
+        guard count <= 300 else { throw ExportError.tooManyFrames }
         let context = CIContext()
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         var written = 0
@@ -202,6 +208,18 @@ enum TendiesExporter {
         }
         guard written > 0 else { throw ExportError.noFrames }
 
+        // Build a ping-pong sequence: forward to the last frame, then backward to frame 1.
+        // Endpoints are not duplicated, so the loop turns smoothly.
+        var totalFrames = written
+        if reverseOnLoop && written > 2 {
+            for sourceIndex in stride(from: written - 2, through: 1, by: -1) {
+                let source = assets.appendingPathComponent(String(format: "%05d.jpg", sourceIndex))
+                let destination = assets.appendingPathComponent(String(format: "%05d.jpg", totalFrames))
+                try fm.copyItem(at: source, to: destination)
+                totalFrames += 1
+            }
+        }
+
         let durationPerFrame = 1.0 / fps
         let caml = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -211,7 +229,7 @@ enum TendiesExporter {
         <key>drawsAsynchronously</key><false/><key>sublayers</key><array><dict>
         <key>bounds</key><string>{{0, 0}, {\(width), \(height)}}</string>
         <key>contents</key><dict><key>initialImage</key><string>assets/00000.jpg</string>
-        <key>frameDuration</key><real>\(durationPerFrame)</real><key>frameCount</key><integer>\(written)</integer>
+        <key>frameDuration</key><real>\(durationPerFrame)</real><key>frameCount</key><integer>\(totalFrames)</integer>
         <key>imageFormat</key><string>jpg</string><key>imageNamePattern</key><string>assets/%05d.jpg</string>
         <key>loop</key><true/><key>type</key><string>ImageSequence</string></dict>
         <key>name</key><string>ContentLayer</string><key>position</key><string>{0, 0}</string>
@@ -275,13 +293,14 @@ enum TendiesExporter {
     }
 
     enum ExportError: LocalizedError {
-        case invalidVideo, frameFailed, noFrames, archiveFailed
+        case invalidVideo, frameFailed, noFrames, archiveFailed, tooManyFrames
         var errorDescription: String? {
             switch self {
             case .invalidVideo: return "The selected video is invalid."
             case .frameFailed: return "A video frame could not be encoded."
             case .noFrames: return "No frames were created."
             case .archiveFailed: return "The Tendies archive could not be packaged."
+            case .tooManyFrames: return "This video exceeds the 300-frame limit at the selected FPS. Lower the FPS or choose a shorter clip."
             }
         }
     }
