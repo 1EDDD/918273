@@ -12,35 +12,65 @@ jobs:
   build:
     name: Build Tendies Studio IPA
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode project
-        run: xcodegen generate --spec project.yml
-
-      - name: Resolve packages
-        run: xcodebuild -resolvePackageDependencies -project TendiesStudio.xcodeproj -scheme TendiesStudio
-
-      - name: Build unsigned iOS app
+      - name: Restore Xcode project from source archive
+        shell: bash
         run: |
-          xcodebuild \
-            -project TendiesStudio.xcodeproj \
-            -scheme TendiesStudio \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY='' \
-            build
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          from pathlib import Path
+          from zipfile import ZipFile
 
-      - name: Package IPA
+          source = Path("source")
+          files = [source / "part01.b64", source / "part02.b64"]
+          files += sorted(source.glob("tail-*.b64"))
+          encoded = "".join(path.read_text().strip() for path in files)
+          archive = Path("tendies-source.zip")
+          archive.write_bytes(base64.b64decode(encoded, validate=True))
+          with ZipFile(archive) as zf:
+              names = zf.namelist()
+              required = [
+                  "TendiesStudio/TendiesStudio.xcodeproj/project.pbxproj",
+                  "TendiesStudio/TendiesStudio/ContentView.swift",
+                  "TendiesStudio/TendiesStudio/TendiesExporter.swift",
+              ]
+              missing = [item for item in required if item not in names]
+              if missing:
+                  raise SystemExit(f"Source archive is incomplete: {missing}")
+              zf.extractall(".")
+          PY
+          test -d TendiesStudio/TendiesStudio.xcodeproj
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve Swift packages
+        run: >-
+          xcodebuild -resolvePackageDependencies
+          -project TendiesStudio/TendiesStudio.xcodeproj
+          -scheme TendiesStudio
+
+      - name: Build for iOS devices without signing
+        run: >-
+          xcodebuild
+          -project TendiesStudio/TendiesStudio.xcodeproj
+          -scheme TendiesStudio
+          -configuration Release
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          -derivedDataPath build/DerivedData
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          CODE_SIGN_IDENTITY=''
+          build
+
+      - name: Package unsigned IPA
+        shell: bash
         run: |
           set -euo pipefail
           APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/TendiesStudio.app"
@@ -49,7 +79,8 @@ jobs:
           ditto "$APP_PATH" build/ipa/Payload/TendiesStudio.app
           (cd build/ipa && /usr/bin/zip -qry "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa" Payload)
           test -s "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa"
-          /usr/bin/unzip -l "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa" | head -40
+          /usr/bin/unzip -t "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa"
+          echo "IPA created: $(du -h "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa" | cut -f1)"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
