@@ -21,7 +21,7 @@ struct ContentView: View {
     @State private var scale = 3
     @State private var identifier = 9136
     @State private var reverseOnLoop = false
-    @State private var jpegQuality = 0.72
+    @State private var jpegQuality = 0.55
     @State private var importing = false
     @State private var converting = false
     @State private var status = "Choose a MOV or MP4 video"
@@ -46,13 +46,18 @@ struct ContentView: View {
                         get: { "\(width)x\(height)" },
                         set: { value in
                             let parts = value.split(separator: "x").compactMap { Int($0) }
-                            if parts.count == 2 { width = parts[0]; height = parts[1] }
+                            if parts.count == 2 {
+                                width = parts[0]
+                                height = parts[1]
+                                scale = (parts[0] == 1668 && parts[1] == 2420) ? 2 : 3
+                            }
                         })) {
                         Text("iPhone 17 Pro Max · 1320 × 2868").tag("1320x2868")
                         Text("iPhone 16 Pro Max · 1320 × 2868").tag("1320x2868")
                         Text("iPhone 16 Pro · 1206 × 2622").tag("1206x2622")
                         Text("iPhone 15 Pro Max · 1290 × 2796").tag("1290x2796")
                         Text("iPhone 15 Pro · 1179 × 2556").tag("1179x2556")
+                        Text("iPad Pro 11-inch (M4/M5) · 1668 × 2420").tag("1668x2420")
                     }
                     Stepper("Frame rate: \(Int(fps)) FPS", value: $fps, in: 1...60, step: 1)
                     VStack(alignment: .leading, spacing: 8) {
@@ -64,7 +69,7 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Slider(value: $jpegQuality, in: 0.50...0.90, step: 0.05)
-                        Text("Lower quality makes smaller files. 70–75% is a balanced starting point.")
+                        Text("50–60% is recommended for smaller files. Higher quality increases file size quickly.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Stepper("Scale: @\(scale)x", value: $scale, in: 1...3)
@@ -175,14 +180,18 @@ enum TendiesExporter {
         guard duration.isFinite, duration > 0 else { throw ExportError.invalidVideo }
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: width * 2, height: height * 2)
+        generator.apertureMode = .cleanAperture
+        generator.maximumSize = CGSize(width: width, height: height)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 30)
 
         let descriptors = temp.appendingPathComponent("descriptors", isDirectory: true)
         let uuid = UUID().uuidString.uppercased()
         let providerUUID = UUID().uuidString.uppercased()
         let root = descriptors.appendingPathComponent(uuid, isDirectory: true)
         let versions = root.appendingPathComponent("versions/1/contents", isDirectory: true)
-        let resolution = "\(width)w-\(height)h@\(scale)x~iphone"
+        let deviceClass = (width == 1668 && height == 2420) ? "ipad" : "iphone"
+        let resolution = "\(width)w-\(height)h@\(scale)x~\(deviceClass)"
         let wallpaperFolder = "\(wallpaperName)-\(resolution).wallpaper"
         let bgName = "\(wallpaperName)_Background-\(resolution).ca"
         let floatName = "\(wallpaperName)_Floating-\(resolution).ca"
@@ -196,31 +205,48 @@ enum TendiesExporter {
         let step = 1.0 / max(1.0, fps)
         let count = max(1, Int(ceil(duration * fps)))
         guard count <= 300 else { throw ExportError.tooManyFrames }
-        let context = CIContext()
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+            throw ExportError.frameFailed("Could not create an sRGB color space.")
+        }
         var written = 0
         for index in 0..<count {
             let seconds = min(Double(index) * step, max(0, duration - 0.001))
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
-            let cg = try generator.copyCGImage(at: time, actualTime: nil)
-            let ci = CIImage(cgImage: cg)
-            let target = CGRect(x: 0, y: 0, width: width, height: height)
-            let sx = CGFloat(width) / ci.extent.width
-            let sy = CGFloat(height) / ci.extent.height
-            let factor = max(sx, sy)
-            let scaled = ci.transformed(by: CGAffineTransform(scaleX: factor, y: factor))
-            let crop = scaled.cropped(to: CGRect(x: scaled.extent.midX - CGFloat(width)/2,
-                                                 y: scaled.extent.midY - CGFloat(height)/2,
-                                                 width: CGFloat(width), height: CGFloat(height)))
-            guard let image = context.createCGImage(crop, from: target, format: .RGBA8, colorSpace: colorSpace) else {
-                throw ExportError.frameFailed
+            let cg: CGImage
+            do {
+                cg = try generator.copyCGImage(at: time, actualTime: nil)
+            } catch {
+                throw ExportError.frameFailed("Could not decode frame \(index + 1)/\(count): \(error.localizedDescription)")
+            }
+            // Render at final dimensions to avoid crop-origin failures and discard excess 4K pixels.
+            guard let bitmap = CGContext(data: nil, width: width, height: height,
+                                         bitsPerComponent: 8, bytesPerRow: width * 4,
+                                         space: colorSpace,
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw ExportError.frameFailed("Could not allocate the output frame buffer.")
+            }
+            bitmap.interpolationQuality = .high
+            let factor = max(CGFloat(width) / CGFloat(cg.width),
+                             CGFloat(height) / CGFloat(cg.height))
+            let drawWidth = CGFloat(cg.width) * factor
+            let drawHeight = CGFloat(cg.height) * factor
+            let drawRect = CGRect(x: (CGFloat(width) - drawWidth) / 2,
+                                  y: (CGFloat(height) - drawHeight) / 2,
+                                  width: drawWidth, height: drawHeight)
+            bitmap.draw(cg, in: drawRect)
+            guard let image = bitmap.makeImage() else {
+                throw ExportError.frameFailed("Could not render frame \(index + 1).")
             }
             let url = assets.appendingPathComponent(String(format: "%05d.jpg", index))
             guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
-                throw ExportError.frameFailed
+                throw ExportError.frameFailed("Could not create JPEG for frame \(index + 1).")
             }
-            CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: jpegQuality] as CFDictionary)
-            guard CGImageDestinationFinalize(dest) else { throw ExportError.frameFailed }
+            CGImageDestinationAddImage(dest, image, [
+                kCGImageDestinationLossyCompressionQuality: max(0.35, min(0.85, jpegQuality))
+            ] as CFDictionary)
+            guard CGImageDestinationFinalize(dest) else {
+                throw ExportError.frameFailed("JPEG encoding failed on frame \(index + 1).")
+            }
             written += 1
         }
         guard written > 0 else { throw ExportError.noFrames }
@@ -351,11 +377,12 @@ enum TendiesExporter {
     }
 
     enum ExportError: LocalizedError {
-        case invalidVideo, frameFailed, noFrames, archiveFailed, tooManyFrames
+        case invalidVideo, noFrames, archiveFailed, tooManyFrames
+        case frameFailed(String)
         var errorDescription: String? {
             switch self {
             case .invalidVideo: return "The selected video is invalid."
-            case .frameFailed: return "A video frame could not be encoded."
+            case .frameFailed(let detail): return detail
             case .noFrames: return "No frames were created."
             case .archiveFailed: return "The Tendies archive could not be packaged."
             case .tooManyFrames: return "This video exceeds the 300-frame limit at the selected FPS. Lower the FPS or choose a shorter clip."
