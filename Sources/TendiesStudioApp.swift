@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var scale = 3
     @State private var identifier = 9136
     @State private var reverseOnLoop = false
+    @State private var jpegQuality = 0.72
     @State private var importing = false
     @State private var converting = false
     @State private var status = "Choose a MOV or MP4 video"
@@ -54,6 +55,18 @@ struct ContentView: View {
                         Text("iPhone 15 Pro · 1179 × 2556").tag("1179x2556")
                     }
                     Stepper("Frame rate: \(Int(fps)) FPS", value: $fps, in: 1...60, step: 1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("JPEG compression")
+                            Spacer()
+                            Text("\(Int(jpegQuality * 100))%")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $jpegQuality, in: 0.50...0.90, step: 0.05)
+                        Text("Lower quality makes smaller files. 70–75% is a balanced starting point.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Stepper("Scale: @\(scale)x", value: $scale, in: 1...3)
                     Stepper("Identifier: \(identifier)", value: $identifier, in: 1...99999)
                     Toggle("Reverse video on loop", isOn: $reverseOnLoop)
@@ -117,14 +130,18 @@ struct ContentView: View {
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(name + ".tendies")
         do {
             try? FileManager.default.removeItem(at: destination)
-            let w = width, h = height, s = scale, f = fps, id = identifier, reverse = reverseOnLoop
+            let w = width, h = height, s = scale, f = fps, id = identifier, reverse = reverseOnLoop, quality = jpegQuality
             try await Task.detached(priority: .userInitiated) {
                 try TendiesExporter.export(videoURL: videoURL, outputURL: destination,
                                            wallpaperName: name, width: w, height: h,
-                                           scale: s, fps: f, identifier: id, reverseOnLoop: reverse)
+                                           scale: s, fps: f, identifier: id, reverseOnLoop: reverse,
+                                           jpegQuality: quality)
             }.value
             outputURL = destination
-            status = "Created \(destination.lastPathComponent)"
+            let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
+            let bytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            let megabytes = Double(bytes) / 1_048_576.0
+            status = String(format: "Created %@ · %.1f MB", destination.lastPathComponent, megabytes)
             progress = 1
         } catch {
             self.error = error.localizedDescription
@@ -147,7 +164,7 @@ struct ShareSheet: UIViewControllerRepresentable {
 enum TendiesExporter {
     static func export(videoURL: URL, outputURL: URL, wallpaperName: String,
                        width: Int, height: Int, scale: Int, fps: Double, identifier: Int,
-                       reverseOnLoop: Bool) throws {
+                       reverseOnLoop: Bool, jpegQuality: Double) throws {
         let fm = FileManager.default
         let temp = fm.temporaryDirectory.appendingPathComponent("tendies-" + UUID().uuidString, isDirectory: true)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true)
@@ -202,7 +219,7 @@ enum TendiesExporter {
             guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
                 throw ExportError.frameFailed
             }
-            CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.88] as CFDictionary)
+            CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: jpegQuality] as CFDictionary)
             guard CGImageDestinationFinalize(dest) else { throw ExportError.frameFailed }
             written += 1
         }
