@@ -1,0 +1,60 @@
+name: Build unsigned iOS IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Tendies Studio IPA
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project TendiesStudio.xcodeproj -scheme TendiesStudio
+
+      - name: Build unsigned iOS app
+        run: |
+          xcodebuild \
+            -project TendiesStudio.xcodeproj \
+            -scheme TendiesStudio \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/TendiesStudio.app"
+          test -d "$APP_PATH"
+          mkdir -p build/ipa/Payload
+          ditto "$APP_PATH" build/ipa/Payload/TendiesStudio.app
+          (cd build/ipa && /usr/bin/zip -qry "$GITHUB_WORKSPACE/TendiesStudio-unsigned.ipa" Payload)
+          test -s TendiesStudio-unsigned.ipa
+          /usr/bin/unzip -l TendiesStudio-unsigned.ipa | head -40
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TendiesStudio-unsigned-IPA
+          path: TendiesStudio-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
