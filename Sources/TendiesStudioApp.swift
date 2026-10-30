@@ -208,32 +208,48 @@ enum TendiesExporter {
         }
         guard written > 0 else { throw ExportError.noFrames }
 
-        // Build a ping-pong sequence: forward to the last frame, then backward to frame 1.
-        // Endpoints are not duplicated, so the loop turns smoothly.
-        var totalFrames = written
-        if reverseOnLoop && written > 2 {
-            for sourceIndex in stride(from: written - 2, through: 1, by: -1) {
-                let source = assets.appendingPathComponent(String(format: "%05d.jpg", sourceIndex))
-                let destination = assets.appendingPathComponent(String(format: "%05d.jpg", totalFrames))
-                try fm.copyItem(at: source, to: destination)
-                totalFrames += 1
-            }
-        }
-
-        let durationPerFrame = 1.0 / fps
+        // Keep one copy of each source frame. PosterBoard's CAKeyframeAnimation
+        // performs the reverse leg with autoreverses, rather than duplicating JPEG assets.
+        let frameValues = (0..<written).map { index in
+            "            <CGImage src=\"assets/\(String(format: "%05d", index)).jpg\"/>"
+        }.joined(separator: "\n")
+        let autoReverses = reverseOnLoop ? "1" : "0"
+        let clipDuration = Double(written) / max(1.0, fps)
         let caml = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0"><dict><key>view</key><dict>
-        <key>backgroundColor</key><string>0 0 0 0</string>
-        <key>drawsAsynchronously</key><false/><key>sublayers</key><array><dict>
-        <key>bounds</key><string>{{0, 0}, {\(width), \(height)}}</string>
-        <key>contents</key><dict><key>initialImage</key><string>assets/00000.jpg</string>
-        <key>frameDuration</key><real>\(durationPerFrame)</real><key>frameCount</key><integer>\(totalFrames)</integer>
-        <key>imageFormat</key><string>jpg</string><key>imageNamePattern</key><string>assets/%05d.jpg</string>
-        <key>loop</key><true/><key>type</key><string>ImageSequence</string></dict>
-        <key>name</key><string>ContentLayer</string><key>position</key><string>{0, 0}</string>
-        <key>type</key><string>CALayer</string></dict></array></dict></dict></plist>
+        <caml xmlns="http://www.apple.com/CoreAnimation/1.0">
+          <CALayer allowsEdgeAntialiasing="1" allowsGroupOpacity="1" bounds="0 0 \(width) \(height)" contentsFormat="RGBA8" cornerCurve="circular" hidden="0" name="_FLOATING" position="\(width / 2) \(height / 2)">
+            <sublayers>
+              <CATransformLayer allowsEdgeAntialiasing="1" allowsGroupOpacity="1" allowsHitTesting="1" bounds="0 0 \(width) \(height)" contentsFormat="RGBA8" cornerCurve="circular" name="Chip" position="\(width / 2) \(height / 2)">
+                <sublayers>
+                  <CALayer allowsEdgeAntialiasing="1" allowsGroupOpacity="1" bounds="0 0 \(width) \(height)" contentsFormat="RGBA8" cornerCurve="circular" name="CALayer1" position="\(width / 2) \(height / 2)">
+                    <contents type="CGImage" src="assets/00000.jpg"/>
+                    <animations>
+                      <animation type="CAKeyframeAnimation" calculationMode="linear" keyPath="contents" beginTime="1e-100" duration="\(clipDuration)" removedOnCompletion="0" repeatCount="inf" repeatDuration="0" speed="1" timeOffset="0" autoreverses="\(autoReverses)">
+                        <values>
+        \(frameValues)
+                        </values>
+                      </animation>
+                    </animations>
+                  </CALayer>
+                </sublayers>
+              </CATransformLayer>
+            </sublayers>
+            <states>
+              <LKState name="Locked"><elements/></LKState>
+              <LKState name="Unlock"><elements/></LKState>
+              <LKState name="Sleep"><elements/></LKState>
+            </states>
+            <stateTransitions>
+              <LKStateTransition fromState="*" toState="Unlock"><elements/></LKStateTransition>
+              <LKStateTransition fromState="Unlock" toState="*"><elements/></LKStateTransition>
+              <LKStateTransition fromState="*" toState="Locked"><elements/></LKStateTransition>
+              <LKStateTransition fromState="Locked" toState="*"><elements/></LKStateTransition>
+              <LKStateTransition fromState="*" toState="Sleep"><elements/></LKStateTransition>
+              <LKStateTransition fromState="Sleep" toState="*"><elements/></LKStateTransition>
+            </stateTransitions>
+          </CALayer>
+        </caml>
         """
         try caml.write(to: bg.appendingPathComponent("main.caml"), atomically: true, encoding: .utf8)
         let empty = """
@@ -245,12 +261,37 @@ enum TendiesExporter {
         try empty.write(to: floating.appendingPathComponent("main.caml"), atomically: true, encoding: .utf8)
         let index = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <plist version="1.0"><dict><key>assetManifest</key><string>assetManifest.caml</string>
-        <key>documentHeight</key><real>\(height)</real><key>documentResizesToView</key><true/>
-        <key>documentWidth</key><real>\(width)</real><key>dynamicGuidesEnabled</key><true/>
-        <key>geometryFlipped</key><false/><key>guidesEnabled</key><true/>
-        <key>loopEnd</key><real>\(duration)</real><key>loopStart</key><real>0</real><key>loopingEnabled</key><true/>
-        </dict></plist>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>assetManifest</key><string>assetManifest.caml</string>
+          <key>documentHeight</key><real>\(height)</real>
+          <key>documentResizesToView</key><true/>
+          <key>documentWidth</key><real>\(width)</real>
+          <key>dynamicGuidesEnabled</key><true/>
+          <key>geometryFlipped</key><false/>
+          <key>guidesEnabled</key><true/>
+          <key>interactiveMouseEventsEnabled</key><true/>
+          <key>interactiveShowsCursor</key><true/>
+          <key>interactiveTouchEventsEnabled</key><false/>
+          <key>loopEnd</key><real>0.0</real>
+          <key>loopStart</key><real>0.0</real>
+          <key>loopingEnabled</key><false/>
+          <key>multitouchDisablesMouse</key><false/>
+          <key>multitouchEnabled</key><false/>
+          <key>presentationMouseEventsEnabled</key><true/>
+          <key>presentationShowsCursor</key><true/>
+          <key>presentationTouchEventsEnabled</key><false/>
+          <key>rootDocument</key><string>main.caml</string>
+          <key>savesWindowFrame</key><false/>
+          <key>scalesToFitInPlayer</key><true/>
+          <key>showsTouches</key><true/>
+          <key>snappingEnabled</key><true/>
+          <key>timelineMarkers</key><string>[(null)]</string>
+          <key>touchesColor</key><string>1 1 0 0.8</string>
+          <key>unitsInPixelsInPlayer</key><true/>
+        </dict>
+        </plist>
         """
         let manifest = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict/></plist>"
         for dir in [bg, floating] {
